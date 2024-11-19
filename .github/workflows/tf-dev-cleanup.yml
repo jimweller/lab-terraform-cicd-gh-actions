@@ -1,0 +1,60 @@
+# Destroys terraform infrastructure in a dev environment any time that a branch
+# is deleted (that is not "main"), e.g. when a PR is merged or a dev branch is
+# deleted on the remote
+name: DEV Terraform CI/CD Cleanup
+on:
+
+# switch to this trigger to disable this job
+#
+#   workflow_dispatch:
+
+  # if a pull request is closed
+  # below we filter on merge
+  pull_request:
+    types:
+      - closed
+
+jobs:
+  tf-dev-cleanup-pr:
+
+    # only run these jobs if this event is closing a merged pull request
+    if: github.event.pull_request.merged == true
+    
+    name: TF Cleanup (dev)
+    runs-on: ubuntu-latest
+    steps:
+    
+      # check out the repo (shallow)
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      # setup AWS credentials
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-2
+          aws-access-key-id: ${{ secrets.AWS_DEV_KEY }}
+          aws-secret-access-key: ${{ secrets.AWS_DEV_SECRET }}
+          role-to-assume: ${{ secrets.AWS_DEV_ROLE }}
+          role-duration-seconds: 1200
+          role-session-name: tf-dev-cicd-role-session
+          role-skip-session-tagging: true
+
+      # Setup terraform using the hashicorp action. This just install terraform
+      # into the temporary working space.
+      - name: TF Setup
+        uses: hashicorp/setup-terraform@v3
+
+      # Initialize terraform modules, etc. Note that it is using the AWS credentials stored in the github
+      # secrets.
+      - name: TF Init
+        run: terraform init
+        env:
+          TF_CLI_ARGS: '-var-file="env/dev.tfvars" -backend-config="bucket=${{ secrets.AWS_DEV_TFSTATE_S3 }}"'
+
+      # Destroy the resources in the AWS dev environment.
+      - name: TF Destroy
+        run: terraform destroy -auto-approve
+        env:
+          TF_CLI_ARGS: '-var-file="env/dev.tfvars"'
+

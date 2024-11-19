@@ -1,0 +1,99 @@
+# Deploys terraform infrastructure to a DEV environment whenever a non-main
+# branch receives a push. This allows you to continually update a branch and see
+# the terraform being applied in a dev aws account
+#
+# This is considered a test pipeline. Meaning that you can use it as a status
+# check for branch protection rules. If this pipeline runs successfully and you
+# are happy with the results in the dev AWS account, then the change is
+# considered successfully tested for the purpose of merging a PR.
+#
+# Note, before you can push to main, you'll need to do a PR with the working
+# branch per team git standards. But you can keep tweaking the branch with new
+# commits and pushes until you are ready to submit the PR for review
+name: DEV Terraform CI/CD Pipeline
+on:
+
+# switch to this trigger to disable this job
+#
+#  workflow_dispatch:
+
+  pull_request:
+    # when a pull request is opened or a new committ is added to the PR
+    # basically if the infra changes during PR, redeploy it
+    types: 
+      - opened
+      - reopened
+      - synchronize
+    # any branch except main
+    # branches: 
+    #   - '**'
+    #   - '!main'
+    # only run the workflow for terraform files
+    paths:
+      - "**.tf"
+      - "**.tfvars"
+
+jobs:
+  tf-dev-cicd-pr:
+    name: Infrastructure Jobs (dev)
+    runs-on: ubuntu-latest
+    steps:
+
+      # checkout the repo (shallow)
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      # setup AWS credentials
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-2
+          aws-access-key-id: ${{ secrets.AWS_DEV_KEY }}
+          aws-secret-access-key: ${{ secrets.AWS_DEV_SECRET }}
+          role-to-assume: ${{ secrets.AWS_DEV_ROLE }}
+          role-duration-seconds: 1200
+          role-session-name: tf-dev-cicd-role-session
+          role-skip-session-tagging: true
+
+      # Setup terraform using the hashicorp action. This just install terraform
+      # into the temporary working space.
+      - name: TF Setup (dev)
+        uses: hashicorp/setup-terraform@v3
+
+      # Initialize terraform modules, etc. Note that it is using the AWS credentials stored in the github
+      # secrets.
+      - name: TF Init (dev)
+        run: terraform init
+        env:
+          TF_CLI_ARGS: '-var-file="env/dev.tfvars" -backend-config="bucket=terraform-remote-state-504400329018-us-east-2"'
+
+      # Validate the TF HCL syntax
+      - name: TF Validate (dev)
+        run: terraform validate
+
+      # TF plan. Note that it is using the AWS credentials stored in the github
+      # secrets.
+      - name: TF Plan (dev)
+        run: terraform plan
+        env:
+          TF_CLI_ARGS: '-var-file="env/dev.tfvars"'
+
+      # Inject terraform details into the README.md file.
+      # Between the template markers
+      #
+      # <!-- BEGIN_TF_DOCS -->
+      #
+      # <!-- END_TF_DOCS -->
+      - name: TF documentation in README.md  (dev)
+        uses: terraform-docs/gh-actions@v1
+        with:
+          working-dir: .
+          output-file: TFDOCS.md
+          output-method: inject
+          git-push: "true"
+
+      # Finally, apply the terraform to dev.
+      - name: TF Apply  (dev)
+        run: terraform apply -auto-approve
+        env:
+          TF_CLI_ARGS: '-var-file="env/dev.tfvars"'

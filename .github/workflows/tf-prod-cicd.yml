@@ -1,0 +1,83 @@
+# Deploys a terraform infrastructure to !PRODUCTION! whenever a 
+# branch is pushed to main.
+#
+# Note: You should use a branch protection rule to enforce that
+# main is only pushed via a PR per the team git standards
+
+name: PROD Terraform CI/CD Pipeline
+on:
+
+# switch to this trigger to disable this job
+#
+#   workflow_dispatch
+
+  push:
+    branches: [main]
+    paths:
+      - "**.tf"
+      - "**.tfvars"
+  
+#   pull_request:
+#     branches: [main]
+#     paths:
+#       - "**.tf"
+#       - "**.tfvars"
+  
+
+jobs:
+  tf-prod-cicd:
+    name: Infrastructure Jobs (prod)
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # checkout the repo (complete, not shallow, for yor's blame checking)
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+        with:
+          # this is required for yor tagging. yor needs historical information
+          # to make decissions about git_* tags (unshallow)
+          fetch-depth: 0
+          #ref: ${{ github.event.pull_request.head.ref }}
+
+      # setup AWS credentials
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-2
+          aws-access-key-id: ${{ secrets.AWS_PROD_KEY }}
+          aws-secret-access-key: ${{ secrets.AWS_PROD_SECRET }}
+          role-to-assume: ${{ secrets.AWS_PROD_ROLE }}
+          role-duration-seconds: 1200
+          role-session-name: tf-dev-cicd-role-session
+          role-skip-session-tagging: true
+
+      # Setup terraform using the hashicorp action. This just install terraform
+      # into the temporary working space.
+      - name: TF Setup (prod)
+        uses: hashicorp/setup-terraform@v3
+
+
+      # Initialize terraform modules, etc. Note that it is using the AWS credentials stored in the github
+      # secrets.
+      - name: TF Init (prod)
+        run: terraform init
+        env:
+          TF_CLI_ARGS: '-var-file="env/prod.tfvars" -backend-config="bucket=${{ secrets.AWS_PROD_TFSTATE_S3 }}"'
+
+      # Validate the TF HCL syntax
+      - name: TF Validate (prod)
+        run: terraform validate
+
+      # TF plan. Note that it is using the AWS credentials stored in the github
+      # secrets.
+      - name: TF Plan (prod)
+        run: terraform plan
+        env:
+          TF_CLI_ARGS: '-var-file="env/prod.tfvars"'
+
+      # Finally, apply the terraform to production.
+      - name: TF Apply (prod)
+        run: terraform apply -auto-approve
+        env:
+          TF_CLI_ARGS: '-var-file="env/prod.tfvars"'
